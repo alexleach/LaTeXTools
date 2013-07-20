@@ -36,22 +36,27 @@ class View_pdfCommand(sublime_plugin.WindowCommand):
 			# Search in the GUI: under Settings|Options...
 			# Under "Set inverse search command-line", set:
 			# sublime_text "%f":%l
-			viewercmd = ["SumatraPDF", "-reuse-instance"]		
+			viewercmd = ["SumatraPDF", "-reuse-instance"]
 		elif s == "Linux":
-			# the required scripts are in the 'evince' subdir
-			script_path = os.path.join(sublime.packages_path(), 'LaTeXTools', 'evince')
-			ev_sync_exec = os.path.join(script_path, 'evince_sync') # so we get inverse search
-			# Get python binary if set in preferences:
-			py_binary = prefs_lin["python2"] or 'python'
-			sb_binary = prefs_lin["sublime"] or 'sublime-text'
-			viewercmd = ['sh', ev_sync_exec, py_binary, sb_binary]
+			if subprocess.call(['which', 'okular']) == 0:
+				# for inverse search: Settings|Configure Okular|Editor ...
+				# Under "Command" set: sublime_text" "%f":%l
+				viewercmd = ["okular", "--unique"]
+			else:
+				# the required scripts are in the 'evince' subdir
+				script_path = os.path.join(sublime.packages_path(), 'LaTeXTools', 'evince')
+				ev_sync_exec = os.path.join(script_path, 'evince_sync') # so we get inverse search
+				# Get python binary if set in preferences:
+				py_binary = prefs_lin["python2"] or 'python'
+				sb_binary = prefs_lin["sublime"] or 'sublime-text'
+				viewercmd = ['sh', ev_sync_exec, py_binary, sb_binary]
 		else:
 			sublime.error_message("Platform as yet unsupported. Sorry!")
 			return	
-		print viewercmd + [pdfFile]
+		print('Executing: {0}'.format(' '.join(viewercmd + [pdfFile])))
 		try:
 			Popen(viewercmd + [pdfFile], cwd=script_path)
 		except OSError:
 			sublime.error_message("Cannot launch Viewer. Make sure it is on your PATH.")
 
-			
+# vim: noexpandtab shiftwidth=4 sts=0

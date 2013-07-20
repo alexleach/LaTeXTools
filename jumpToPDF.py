@@ -44,12 +44,11 @@ class jump_to_pdfCommand(sublime_plugin.TextCommand):
 
 		# Query view settings to see if we need to keep focus or let the PDF viewer grab it
 		# By default, we respect settings in Preferences
-		
 
 		# platform-specific code:
 		plat = sublime_plugin.sys.platform
 		if plat == 'darwin':
-			options = ["-r","-g"] if keep_focus else ["-r"]		
+			options = ["-r","-g"] if keep_focus else ["-r"]
 			if forward_sync:
 				subprocess.Popen(["/Applications/Skim.app/Contents/SharedSupport/displayline"] + 
 								options + [str(line), pdffile, srcfile])
@@ -85,39 +84,110 @@ class jump_to_pdfCommand(sublime_plugin.TextCommand):
 				self.view.run_command("send_dde",
 						{ "service": "SUMATRA", "topic": "control", "command": command})
 
-		
 		elif 'linux' in plat: # for some reason, I get 'linux2' from sys.platform
-			print "Linux!"
-			
-			# the required scripts are in the 'evince' subdir
-			ev_path = os.path.join(sublime.packages_path(), 'LaTeXTools', 'evince')
-			ev_fwd_exec = os.path.join(ev_path, 'evince_forward_search')
-			ev_sync_exec = os.path.join(ev_path, 'evince_sync') # for inverse search!
-			#print ev_fwd_exec, ev_sync_exec
-			
-			# Run evince if either it's not running, or if focus PDF was toggled
-			# Sadly ST2 has Python <2.7, so no check_output:
-			running_apps = subprocess.Popen(['ps', 'xw'], stdout=subprocess.PIPE).communicate()[0]
-			# If there are non-ascii chars in the output just captured, we will fail.
-			# Thus, decode using the 'ignore' option to simply drop them---we don't need them
-			running_apps = running_apps.decode(sublime_plugin.sys.getdefaultencoding(), 'ignore')
-			
-			# Run scripts through sh because the script files will lose their exec bit on github
+			print("Linux!")
+			launcher = LinuxPDFLauncher(line, col, srcfile, pdffile)
+			launcher.launch()
 
-			# Get python binary if set:
-			py_binary = prefs_lin["python2"] or 'python'
-			sb_binary = prefs_lin["sublime"] or 'sublime-text'
-			# How long we should wait after launching sh before syncing
-			sync_wait = prefs_lin["sync_wait"] or 1.0
-
-			evince_running = ("evince " + pdffile in running_apps)
-			if (not keep_focus) or (not evince_running):
-				print "(Re)launching evince"
-				subprocess.Popen(['sh', ev_sync_exec, py_binary, sb_binary, pdffile], cwd=ev_path)
-				print "launched evince_sync"
-				if not evince_running: # Don't wait if we have already shown the PDF
-					time.sleep(sync_wait)
-			if forward_sync:
-				subprocess.Popen([py_binary, ev_fwd_exec, pdffile, str(line), srcfile])
 		else: # ???
 			pass
+
+class LinuxPDFLauncher:
+	def __init__(self, line, col, srcfile, pdffile):
+		self.line = line
+		self.col = col
+		self.srcfile = srcfile
+		self.pdffile = pdffile
+		self.rootDir = os.path.dirname(srcfile)
+
+	def launch(self):
+		"""Open the generated PDF, preferably with okular, and fall back
+		to evince. Currently use `which` to see if okular is installed.."""
+		if subprocess.call(['which', 'okular']) == 0:
+			launcher = self._launch_okular
+		else:
+			launcher = self._launch_evince
+		from threading import Thread
+		launch_thread = Thread(target=launcher)
+		launch_thread.daemon = True
+		launch_thread.start()
+	
+	def _launch(self, command, **kwds):
+		print("Executing: {0}".format(' '.join(command)))
+		proc = subprocess.Popen(command,
+				bufsize=1,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				**kwds)
+		self._non_block_read(proc.stdout, proc.stderr)
+
+	def _launch_okular(self):
+		subcommand = 'okular --unique -p %{page} %{output}'
+		#subcommand = "okular --unique {0}#src:{1}{2}".format(pdffile, line, srcfile)
+		command = [ 'synctex', 'view',
+					'-i', '{0}:{1}:{2}'.format(self.line, self.col, self.srcfile),
+					'-o', self.pdffile,
+					'-d', self.rootDir,
+					'-x', subcommand ]
+
+		self._launch(command)
+
+	def _launch_evince(self):
+		# the required scripts are in the 'evince' subdir
+		ev_path = os.path.join(sublime.packages_path(), 'LaTeXTools', 'evince')
+		ev_fwd_exec = os.path.join(ev_path, 'evince_forward_search')
+		ev_sync_exec = os.path.join(ev_path, 'evince_sync') # for inverse search!
+
+		# Run evince if either it's not running, or if focus PDF was toggled
+		# Sadly ST2 has Python <2.7, so no check_output:
+		running_apps = subprocess.Popen(['ps', 'xw'], stdout=subprocess.PIPE).communicate()[0]
+		# If there are non-ascii chars in the output just captured, we will fail.
+		# Thus, decode using the 'ignore' option to simply drop them---we don't need them
+		running_apps = running_apps.decode(sublime_plugin.sys.getdefaultencoding(), 'ignore')
+
+		# Run scripts through sh because the script files will lose their exec bit on github
+
+		# Get python binary if set:
+		py_binary = prefs_lin["python2"] or 'python'
+		sb_binary = prefs_lin["sublime"] or 'sublime-text'
+		# How long we should wait after launching sh before syncing
+		sync_wait = prefs_lin["sync_wait"] or 1.0
+
+		evince_running = ("evince " + pdffile in running_apps)
+		if (not keep_focus) or (not evince_running):
+			command = ['sh', ev_sync_exec, py_binary, sb_binary, pdffile],
+			print "(Re)launching evince"
+			self._launch(command, cwd=ev_path)
+			print "launched evince_sync"
+			if not evince_running: # Don't wait if we have already shown the PDF
+				time.sleep(sync_wait)
+		if forward_sync:
+			command = [py_binary, ev_fwd_exec, pdffile, str(line), srcfile]
+			self._launch(command)
+
+	def _non_block_read(self, out, err):
+		"""Run in a separate thread, to send viewer output to the
+		Sublime console, not `~/.xsession-errors`
+		"""
+		import fcntl, select, sys
+		print("start non_block_read")
+		#fd = out.fileno()
+		for inp in (out, err,):
+			fl = fcntl.fcntl(inp, fcntl.F_GETFL)
+			fcntl.fcntl(inp, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+		while True:
+			rx = select.select([out, err], [], [])[0]
+			try:
+				data = ""
+				for r in rx:
+					data += r.read()
+			except (IOError, OSError) as e:
+				print("Error in non_block_read: {0}".format(e))
+				time.sleep(0.5)
+				continue
+			if not data:
+				break
+			sys.stdout.write(data)
+		print("non_block_read complete")
+
+# vim: noexpandtab shiftwidth=4 sts=0 

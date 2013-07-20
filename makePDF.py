@@ -7,6 +7,7 @@ import getTeXRoot
 import parseTeXlog
 
 DEBUG = False
+#DEBUG = True
 
 # Compile current .tex file using platform-specific tool
 # On Windows, use texify; on Mac, use latexmk
@@ -250,7 +251,7 @@ class make_pdfCommand(sublime_plugin.WindowCommand):
 		else:
 			sublime.error_message("Platform as yet unsupported. Sorry!")
 			return	
-		print self.make_cmd + [self.file_name]
+		print('Executing: {0}'.format(' '.join(self.make_cmd + [self.file_name])))
 		
 		os.chdir(tex_dir)
 		CmdThread(self).start()
